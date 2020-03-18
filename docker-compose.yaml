@@ -1,0 +1,37 @@
+version: "3"
+services:
+  redisdsp:
+    image: redis
+    ports:
+      - 6379:6379
+
+  redisssp:
+    image: redis
+    ports:
+      - 6380:6379
+
+  dsp:
+    build:
+      context: ./dsp
+    links:
+      - redisdsp
+    environment:
+      - REDIS_URL=redisdsp://cache
+    ports:
+      - 5050:5050
+
+  ssp:
+    build:
+      context: ./ssp
+    links:
+      - redisssp
+    environment:
+      - REDIS_URL=redisssp://cache
+    ports:
+      - 6060:6060
+
+  website:
+    build:
+      context: ./website
+    ports:
+      - 8080:80
