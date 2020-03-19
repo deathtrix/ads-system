@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -52,6 +53,24 @@ func loadStaticPage(filename string) ([]byte, error) {
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello from DSP")
+}
+
+func addSSPHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case "POST":
+		decoder := json.NewDecoder(r.Body)
+		ssp := make(map[string]interface{})
+		err := decoder.Decode(&ssp)
+		if err != nil {
+			panic(err)
+		}
+		addSSP(ssp)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"message": "SSP saved"}`))
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
 }
 
 func cookieSyncHandler(w http.ResponseWriter, r *http.Request) {
@@ -126,20 +145,14 @@ func scriptHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func addSSP(mapSSP map[string]interface{}) {
-	pipe := client.Pipeline()
-	sspID := fmt.Sprintf("%v", checkVal(pipe.Incr("ssp_counter").Result()))
-	check(pipe.HMSet("ssp:"+sspID,
-		mapSSP).Err())
-	pipe.SAdd("ssps:index", "ssp:"+sspID)
-	checkVal(pipe.Exec())
+	sspID := fmt.Sprintf("%v", checkVal(client.Incr("ssp_counter").Result()))
+	check(client.HMSet("ssp:"+sspID, mapSSP).Err())
+	client.SAdd("ssps:index", "ssp:"+sspID)
 }
 
 func addAudience(audID string, mapSSP map[string]interface{}) {
-	pipe := client.Pipeline()
-	check(pipe.HMSet("aud:"+audID,
-		mapSSP).Err())
-	pipe.SAdd("audience:index", "ssp:"+audID)
-	checkVal(pipe.Exec())
+	check(client.HMSet("aud:"+audID, mapSSP).Err())
+	client.SAdd("audience:index", "ssp:"+audID)
 }
 
 func newRedisClient() *redis.Client {
@@ -175,6 +188,7 @@ func main() {
 	http.HandleFunc("/pixelSync.gif", cookieSyncHandler)
 	http.HandleFunc("/js/", scriptHandler)
 	http.HandleFunc("/status/", statusHandler)
+	http.HandleFunc("/add-ssp", addSSPHandler)
 	http.HandleFunc("/", rootHandler)
 
 	// bring HTTP server up

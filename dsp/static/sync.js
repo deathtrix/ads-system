@@ -13,7 +13,7 @@ const sspSync = [
 {{range $i, $d := .SSPs}}{
     {{range $k, $v := $d}}"{{$k}}": "{{$v}}",
     {{end}}
-  },{{end}}
+},{{end}}
 ];
 
 timeoutID = setTimeout(syncSSPs, 300);
