@@ -18,6 +18,8 @@ import (
 
 const dspName = "dsp3354"
 const dspCookieName = dspName + "_cookie_id"
+const sspNameIn = "ssp_name"
+const sspCookieIn = "ssp_cookie"
 
 // SSP structure with SSP properties
 type SSP map[string]interface{}
@@ -86,13 +88,38 @@ func cookieSyncHandler(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now().Unix(),
 	}
 	addAudience(id, aud)
+
+	// return cookie
 	expiration := time.Now().Add(24 * time.Hour)
 	cookie := http.Cookie{Name: dspCookieName, Value: id, Expires: expiration, Path: "/"}
+	w.Header().Add("Content-Type", "image/gif")
 	http.SetCookie(w, &cookie)
+}
 
-	// for ssp - if resync - redirect back to dsp
-	// dsp := "http://www.google.com"
-	// http.Redirect(w, r, dsp, 301)
+func resyncHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	sspName := query[sspNameIn][0]
+	sspCookie := query[sspCookieIn][0]
+	sspCookieName := sspName + "_cookie_id"
+
+	audIDCookie, err := r.Cookie(dspCookieName)
+	if err != nil {
+		return
+	}
+	audID := audIDCookie.Value
+
+	aud := map[string]interface{}{
+		"timestamp":   time.Now().Unix(),
+		sspCookieName: sspCookie,
+	}
+	addAudience(audID, aud)
+
+	image, err := loadStaticPage("px.gif")
+	if err != nil {
+		panic(err)
+	}
+	w.Header().Add("Content-Type", "image/gif")
+	w.Write(image)
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
@@ -109,9 +136,9 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 					panic(err)
 				}
 				ts := time.Unix(i, 0)
-				fmt.Fprintf(w, key+": "+ts.String())
+				fmt.Fprintf(w, key+": "+ts.String()+"\n")
 			} else {
-				fmt.Fprintf(w, key+": "+value)
+				fmt.Fprintf(w, key+": "+value+"\n")
 			}
 		}
 	} else {
@@ -186,6 +213,7 @@ func main() {
 
 	// handle HTTP requests
 	http.HandleFunc("/pixelSync.gif", cookieSyncHandler)
+	http.HandleFunc("/resync.gif", resyncHandler)
 	http.HandleFunc("/js/", scriptHandler)
 	http.HandleFunc("/status/", statusHandler)
 	http.HandleFunc("/add-ssp", addSSPHandler)
