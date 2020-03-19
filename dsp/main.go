@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
 	"text/template"
 	"time"
 
@@ -40,32 +42,62 @@ func checkVal(val interface{}, err error) interface{} {
 	return val
 }
 
-// func loadPage(filename string) ([]byte, error) {
-// 	body, err := ioutil.ReadFile("./static/" + filename)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	return body, nil
-// }
+func loadStaticPage(filename string) ([]byte, error) {
+	body, err := ioutil.ReadFile("./static/" + filename)
+	if err != nil {
+		panic(err)
+	}
+	return body, nil
+}
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello from DSP")
 }
 
 func cookieSyncHandler(w http.ResponseWriter, r *http.Request) {
-	// get data from redis
-
-	// build and set the cookie
-	id := guuid.New()
-
+	audIDCookie, _ := r.Cookie(dspCookieName)
+	audID := audIDCookie.Value
+	var id string
+	if len(audID) > 0 {
+		id = audID
+	} else {
+		id = guuid.New().String()
+	}
+	aud := map[string]interface{}{
+		"timestamp": time.Now().Unix(),
+	}
+	addAudience(id, aud)
 	expiration := time.Now().Add(24 * time.Hour)
-	cookie := http.Cookie{Name: dspCookieName, Value: id.String(), Expires: expiration, Path: "/"}
+	cookie := http.Cookie{Name: dspCookieName, Value: id, Expires: expiration, Path: "/"}
 	http.SetCookie(w, &cookie)
 
-	// cookie, _ := r.Cookie("username")
-	// redirect to ssp
-	// ssp := "http://www.google.com"
-	// http.Redirect(w, r, ssp, 301)
+	// for ssp - if resync - redirect back to dsp
+	// dsp := "http://www.google.com"
+	// http.Redirect(w, r, dsp, 301)
+}
+
+func statusHandler(w http.ResponseWriter, r *http.Request) {
+	audID := r.URL.Path[len("/status/"):]
+	audMap, err := client.HGetAll("aud:" + audID).Result()
+	if err != nil {
+		panic(err)
+	}
+	if len(audMap) > 0 {
+		for key, value := range audMap {
+			if key == "timestamp" {
+				i, err := strconv.ParseInt(value, 10, 64)
+				if err != nil {
+					panic(err)
+				}
+				ts := time.Unix(i, 0)
+				fmt.Fprintf(w, key+": "+ts.String())
+			} else {
+				fmt.Fprintf(w, key+": "+value)
+			}
+		}
+	} else {
+		fmt.Fprintf(w, "Audience cookie not found")
+	}
 }
 
 func scriptHandler(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +107,7 @@ func scriptHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	// load ssps from redis
+	// load SSPs from redis
 	var ssps []SSP
 	sspsList, err := client.SMembers("ssps:index").Result()
 	if err != nil {
@@ -86,7 +118,7 @@ func scriptHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			panic(err)
 		}
-		ssp := SSP{"url": sspMap["url"], "cookie": sspMap["cookie"], "resync": sspMap["resync"]}
+		ssp := SSP{"url": sspMap["sync-url"], "cookie": sspMap["cookie-name"], "resync": sspMap["resync"]}
 		ssps = append(ssps, ssp)
 	}
 
@@ -95,10 +127,18 @@ func scriptHandler(w http.ResponseWriter, r *http.Request) {
 
 func addSSP(mapSSP map[string]interface{}) {
 	pipe := client.Pipeline()
-	audID := fmt.Sprintf("%v", checkVal(pipe.Incr("audience_counter").Result()))
-	check(pipe.HMSet("ssp:"+audID,
+	sspID := fmt.Sprintf("%v", checkVal(pipe.Incr("ssp_counter").Result()))
+	check(pipe.HMSet("ssp:"+sspID,
 		mapSSP).Err())
-	pipe.SAdd("ssps:index", "ssp:"+audID)
+	pipe.SAdd("ssps:index", "ssp:"+sspID)
+	checkVal(pipe.Exec())
+}
+
+func addAudience(audID string, mapSSP map[string]interface{}) {
+	pipe := client.Pipeline()
+	check(pipe.HMSet("aud:"+audID,
+		mapSSP).Err())
+	pipe.SAdd("audience:index", "ssp:"+audID)
 	checkVal(pipe.Exec())
 }
 
@@ -116,24 +156,26 @@ func newRedisClient() *redis.Client {
 }
 
 func seedDatabase() {
+	// add new SSP
 	ssp := map[string]interface{}{
-		"url":    "http://localhost:6060/sync.gif",
-		"cookie": "ssp1_cookie",
-		"resync": "1",
+		"name":             "ssp1",
+		"sync-url":         "http://localhost:6060/sync.gif",
+		"sync-details-url": "http://localhost:6060/usersync",
+		"cookie-name":      "ssp1_cookie",
+		"resync":           "1",
 	}
 	addSSP(ssp)
 }
 
 func main() {
 	client = newRedisClient()
-
-	// seed database
 	seedDatabase()
 
 	// handle HTTP requests
-	http.HandleFunc("/", rootHandler)
 	http.HandleFunc("/pixelSync.gif", cookieSyncHandler)
 	http.HandleFunc("/js/", scriptHandler)
+	http.HandleFunc("/status/", statusHandler)
+	http.HandleFunc("/", rootHandler)
 
 	// bring HTTP server up
 	s := &http.Server{
